@@ -208,25 +208,25 @@ private:
 
     VkQueue graphicsQueue;
     VkQueue presentQueue;
-    
+
     VDeleter<VkSwapchainKHR> swapChain{device, vkDestroySwapchainKHR};
     std::vector<VkImage> swapChainImages;
     VkFormat swapChainImageFormat;
     VkExtent2D swapChainExtent;
     std::vector<VDeleter<VkImageView>> swapChainImageViews;
     std::vector<VDeleter<VkFramebuffer>> swapChainFramebuffers;
-    
+
     VDeleter<VkRenderPass> renderPass{device, vkDestroyRenderPass};
     VDeleter<VkDescriptorSetLayout> descriptorSetLayout{device, vkDestroyDescriptorSetLayout};
     VDeleter<VkPipelineLayout> pipelineLayout{device, vkDestroyPipelineLayout};
     VDeleter<VkPipeline> graphicsPipeline{device, vkDestroyPipeline};
-    
+
     VDeleter<VkCommandPool> commandPool{device, vkDestroyCommandPool};
-    
+
     VDeleter<VkImage> depthImage{device, vkDestroyImage};
     VDeleter<VkDeviceMemory> depthImageMemory{device, vkFreeMemory};
     VDeleter<VkImageView> depthImageView{device, vkDestroyImageView};
-    
+
     VDeleter<VkImage> textureImage{device, vkDestroyImage};
     VDeleter<VkDeviceMemory> textureImageMemory{device, vkFreeMemory};
     VDeleter<VkImageView> textureImageView{device, vkDestroyImageView};
@@ -299,11 +299,13 @@ private:
         }
 
         vkDeviceWaitIdle(device);
+
+        glfwDestroyWindow(window);
     }
 
     static void onWindowResized(GLFWwindow* window, int width, int height) {
         if (width == 0 || height == 0) return;
-        
+
         HelloTriangleApplication* app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
         app->recreateSwapChain();
     }
@@ -533,11 +535,11 @@ private:
         depthAttachmentRef.attachment = 1;
         depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-        VkSubpassDescription subPass = {};
-        subPass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subPass.colorAttachmentCount = 1;
-        subPass.pColorAttachments = &colorAttachmentRef;
-        subPass.pDepthStencilAttachment = &depthAttachmentRef;
+        VkSubpassDescription subpass = {};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorAttachmentRef;
+        subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
         VkSubpassDependency dependency = {};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -553,7 +555,7 @@ private:
         renderPassInfo.attachmentCount = attachments.size();
         renderPassInfo.pAttachments = attachments.data();
         renderPassInfo.subpassCount = 1;
-        renderPassInfo.pSubpasses = &subPass;
+        renderPassInfo.pSubpasses = &subpass;
         renderPassInfo.dependencyCount = 1;
         renderPassInfo.pDependencies = &dependency;
 
@@ -800,9 +802,27 @@ private:
         VDeleter<VkDeviceMemory> stagingImageMemory{device, vkFreeMemory};
         createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_LINEAR, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingImage, stagingImageMemory);
 
+        VkImageSubresource subresource = {};
+        subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        subresource.mipLevel = 0;
+        subresource.arrayLayer = 0;
+
+        VkSubresourceLayout stagingImageLayout;
+        vkGetImageSubresourceLayout(device, stagingImage, &subresource, &stagingImageLayout);
+
         void* data;
         vkMapMemory(device, stagingImageMemory, 0, imageSize, 0, &data);
+
+        if (stagingImageLayout.rowPitch == texWidth * 4) {
             memcpy(data, pixels, (size_t) imageSize);
+        } else {
+            uint8_t* dataBytes = reinterpret_cast<uint8_t*>(data);
+
+            for (int y = 0; y < texHeight; y++) {
+                memcpy(&dataBytes[y * stagingImageLayout.rowPitch], &pixels[y * texWidth * 4], texWidth * 4);
+            }
+        }
+
         vkUnmapMemory(device, stagingImageMemory);
 
         stbi_image_free(pixels);
@@ -1008,7 +1028,7 @@ private:
                     uniqueVertices[vertex] = vertices.size();
                     vertices.push_back(vertex);
                 }
-                
+
                 indices.push_back(uniqueVertices[vertex]);
             }
         }
@@ -1380,7 +1400,10 @@ private:
         if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
             return capabilities.currentExtent;
         } else {
-            VkExtent2D actualExtent = {WIDTH, HEIGHT};
+            int width, height;
+            glfwGetWindowSize(window, &width, &height);
+
+            VkExtent2D actualExtent = {width, height};
 
             actualExtent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, actualExtent.width));
             actualExtent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, actualExtent.height));

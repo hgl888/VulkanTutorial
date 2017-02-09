@@ -10,6 +10,8 @@ void mainLoop() {
         glfwPollEvents();
         drawFrame();
     }
+
+    glfwDestroyWindow(window);
 }
 
 ...
@@ -319,7 +321,7 @@ may still be going on. Cleaning up resources while that is happening is a bad
 idea.
 
 To fix that problem, we should wait for the logical device to finish operations
-before exiting `mainLoop`:
+before exiting `mainLoop` and destroying the window:
 
 ```c++
 void mainLoop() {
@@ -329,6 +331,8 @@ void mainLoop() {
     }
 
     vkDeviceWaitIdle(device);
+
+    glfwDestroyWindow(window);
 }
 ```
 
@@ -351,4 +355,6 @@ from this point on.
 In the next chapter we'll deal with one more small thing that is required for a
 well-behaved Vulkan program.
 
-[Full code listing](/code/hello_triangle.cpp)
+[C++ code](/code/hello_triangle.cpp) /
+[Vertex shader](/code/shader_base.vert) /
+[Fragment shader](/code/shader_base.frag)

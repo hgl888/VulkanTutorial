@@ -381,11 +381,11 @@ depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 Add a reference to the attachment for the first (and only) subpass:
 
 ```c++
-VkSubpassDescription subPass = {};
-subPass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-subPass.colorAttachmentCount = 1;
-subPass.pColorAttachments = &colorAttachmentRef;
-subPass.pDepthStencilAttachment = &depthAttachmentRef;
+VkSubpassDescription subpass = {};
+subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+subpass.colorAttachmentCount = 1;
+subpass.pColorAttachments = &colorAttachmentRef;
+subpass.pDepthStencilAttachment = &depthAttachmentRef;
 ```
 
 Unlike color attachments, a subpass can only use a single depth (+stencil)
@@ -399,7 +399,7 @@ renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 renderPassInfo.attachmentCount = attachments.size();
 renderPassInfo.pAttachments = attachments.data();
 renderPassInfo.subpassCount = 1;
-renderPassInfo.pSubpasses = &subPass;
+renderPassInfo.pSubpasses = &subpass;
 renderPassInfo.dependencyCount = 1;
 renderPassInfo.pDependencies = &dependency;
 ```
@@ -552,4 +552,6 @@ Congratulations, your application is now finally ready to render arbitrary 3D
 geometry and have it look right. We're going to try this out in the next chapter
 by drawing a textured model!
 
-[Full code listing](/code/depth_buffering.cpp)
+[C++ code](/code/depth_buffering.cpp) /
+[Vertex shader](/code/shader_textures.vert) /
+[Fragment shader](/code/shader_textures.frag)
