@@ -90,10 +90,14 @@ void main() {
 ```
 
 Note that the order of the `uniform`, `in` and `out` declarations doesn't
-matter. The `binding` directive is similar to the `layout` directive for
+matter. The `binding` directive is similar to the `location` directive for
 attributes. We're going to reference this binding in the descriptor layout. The
 line with `gl_Position` is changed to use the transformations to compute the
-final position in clip coordinates.
+final position in clip coordinates. Unlike the 2D triangles, the last component
+of the clip coordinates may not be `1`, which will result in a division when
+converted to the final normalized device coordinates on the screen. This is used
+in perspective projection as the *perspective division* and is essential for
+making closer objects look larger than objects that are further away.
 
 ## Descriptor set layout
 
@@ -158,7 +162,7 @@ uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 ```
 
 We also need to specify in which shader stages the descriptor is going to be
-referenced. The `stageFlags` field can be a combination of `VkShaderStage` flags
+referenced. The `stageFlags` field can be a combination of `VkShaderStageFlagBits` values
 or the value `VK_SHADER_STAGE_ALL_GRAPHICS`. In our case, we're only referencing
 the descriptor from the vertex shader.
 
@@ -174,8 +178,8 @@ All of the descriptor bindings are combined into a single
 `pipelineLayout`:
 
 ```c++
-VDeleter<VkDescriptorSetLayout> descriptorSetLayout{device, vkDestroyDescriptorSetLayout};
-VDeleter<VkPipelineLayout> pipelineLayout{device, vkDestroyPipelineLayout};
+VkDescriptorSetLayout descriptorSetLayout;
+VkPipelineLayout pipelineLayout;
 ```
 
 We can then create it using `vkCreateDescriptorSetLayout`. This function accepts
@@ -187,7 +191,7 @@ layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 layoutInfo.bindingCount = 1;
 layoutInfo.pBindings = &uboLayoutBinding;
 
-if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, descriptorSetLayout.replace()) != VK_SUCCESS) {
+if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
     throw std::runtime_error("failed to create descriptor set layout!");
 }
 ```
@@ -198,11 +202,10 @@ specified in the pipeline layout object. Modify the `VkPipelineLayoutCreateInfo`
 to reference the layout object:
 
 ```c++
-VkDescriptorSetLayout setLayouts[] = {descriptorSetLayout};
 VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 pipelineLayoutInfo.setLayoutCount = 1;
-pipelineLayoutInfo.pSetLayouts = setLayouts;
+pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 ```
 
 You may be wondering why it's possible to specify multiple descriptor set
@@ -210,28 +213,39 @@ layouts here, because a single one already includes all of the bindings. We'll
 get back to that in the next chapter, where we'll look into descriptor pools and
 descriptor sets.
 
+The descriptor layout should stick around while we may create new graphics
+pipelines i.e. until the program ends:
+
+```c++
+void cleanup() {
+    cleanupSwapChain();
+
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+
+    ...
+}
+```
+
 ## Uniform buffer
 
 In the next chapter we'll specify the buffer that contains the UBO data for the
 shader, but we need to create this buffer first. We're going to copy new data to
-the uniform buffer every frame, so this time the staging buffer actually needs
-to stick around.
+the uniform buffer every frame, so it doesn't really make any sense to have a
+staging buffer. It would just add extra overhead in this case and likely degrade
+performance instead of improving it.
 
-Add new class members for `uniformStagingBuffer`, `uniformStagingBufferMemory`,
-`uniformBuffer`, and `uniformBufferMemory`:
+Add new class members for `uniformBuffer`, and `uniformBufferMemory`:
 
 ```c++
-VDeleter<VkBuffer> indexBuffer{device, vkDestroyBuffer};
-VDeleter<VkDeviceMemory> indexBufferMemory{device, vkFreeMemory};
+VkBuffer indexBuffer;
+VkDeviceMemory indexBufferMemory;
 
-VDeleter<VkBuffer> uniformStagingBuffer{device, vkDestroyBuffer};
-VDeleter<VkDeviceMemory> uniformStagingBufferMemory{device, vkFreeMemory};
-VDeleter<VkBuffer> uniformBuffer{device, vkDestroyBuffer};
-VDeleter<VkDeviceMemory> uniformBufferMemory{device, vkFreeMemory};
+VkBuffer uniformBuffer;
+VkDeviceMemory uniformBufferMemory;
 ```
 
 Similarly, create a new function `createUniformBuffer` that is called after
-`createIndexBuffer` and allocates the buffers:
+`createIndexBuffer` and allocates the buffer:
 
 ```c++
 void initVulkan() {
@@ -246,15 +260,31 @@ void initVulkan() {
 
 void createUniformBuffer() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformStagingBuffer, uniformStagingBufferMemory);
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, uniformBuffer, uniformBufferMemory);
+    createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffer, uniformBufferMemory);
 }
 ```
 
 We're going to write a separate function that updates the uniform buffer with a
-new transformation every frame, so there will be no `vkMapMemory` and
-`copyBuffer` operations here.
+new transformation every frame, so there will be no `vkMapMemory` here. The
+uniform data will be used for all draw calls, so the buffer containing it should
+only be destroyed at the end:
+
+```c++
+void cleanup() {
+    cleanupSwapChain();
+
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+    vkDestroyBuffer(device, uniformBuffer, nullptr);
+    vkFreeMemory(device, uniformBufferMemory, nullptr);
+
+    ...
+}
+```
+
+## Updating uniform data
+
+Create a new function `updateUniformBuffer` and add a call to it from the main
+loop:
 
 ```c++
 void mainLoop() {
@@ -266,8 +296,6 @@ void mainLoop() {
     }
 
     vkDeviceWaitIdle(device);
-
-    glfwDestroyWindow(window);
 }
 
 ...
@@ -277,10 +305,7 @@ void updateUniformBuffer() {
 }
 ```
 
-## Updating uniform data
-
-Create a new function `updateUniformBuffer` and add a call to it from the main
-loop. This function will generate a new transformation every frame to make the
+This function will generate a new transformation every frame to make the
 geometry spin around. We need to include two new headers to implement this
 functionality:
 
@@ -307,14 +332,12 @@ void updateUniformBuffer() {
     static auto startTime = std::chrono::high_resolution_clock::now();
 
     auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime).count() / 1000.0f;
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 }
 ```
 
 The `updateUniformBuffer` function will start out with some logic to calculate
-the time in seconds since rendering has started with millisecond accuracy. If
-you need timing to be more precise, then you can use `std::chrono::microseconds`
-and divide by `1e6f`, which is short for `1000000.0f`.
+the time in seconds since rendering has started with floating point accuracy.
 
 We will now define the model, view and projection transformations in the
 uniform buffer object. The model rotation will be a simple rotation around the
@@ -322,11 +345,11 @@ Z-axis using the `time` variable:
 
 ```c++
 UniformBufferObject ubo = {};
-ubo.model = glm::rotate(glm::mat4(), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 ```
 
 The `glm::rotate` function takes an existing transformation, rotation angle and
-rotation axis as parameters. The `glm::mat4()` default constructor returns an
+rotation axis as parameters. The `glm::mat4(1.0f)` constructor returns an
 identity matrix. Using a rotation angle of `time * glm::radians(90.0f)`
 accomplishes the purpose of rotation 90 degrees per second.
 
@@ -359,26 +382,23 @@ do this, then the image will be rendered upside down.
 
 All of the transformations are defined now, so we can copy the data in the
 uniform buffer object to the uniform buffer. This happens in exactly the same
-way as we did for vertex buffers with a staging buffer:
+way as we did for vertex buffers, except without a staging buffer:
 
 ```c++
 void* data;
-vkMapMemory(device, uniformStagingBufferMemory, 0, sizeof(ubo), 0, &data);
+vkMapMemory(device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
     memcpy(data, &ubo, sizeof(ubo));
-vkUnmapMemory(device, uniformStagingBufferMemory);
-
-copyBuffer(uniformStagingBuffer, uniformBuffer, sizeof(ubo));
+vkUnmapMemory(device, uniformBufferMemory);
 ```
 
-Using a staging buffer and final buffer this way is not the most efficient way
-to pass frequently changing values to the shader. A more efficient way to pass a
-small buffer of data to shaders are *push constants*. We may look at these in a
-future chapter.
+Using a UBO this way is not the most efficient way to pass frequently changing
+values to the shader. A more efficient way to pass a small buffer of data to
+shaders are *push constants*. We may look at these in a future chapter.
 
 In the next chapter we'll look at descriptor sets, which will actually bind the
 `VkBuffer` to the uniform buffer descriptor so that the shader can access this
 transformation data.
 
-[C++ code](/code/descriptor_layout.cpp) /
-[Vertex shader](/code/shader_ubo.vert) /
-[Fragment shader](/code/shader_ubo.frag)
+[C++ code](/code/21_descriptor_layout.cpp) /
+[Vertex shader](/code/21_shader_ubo.vert) /
+[Fragment shader](/code/21_shader_ubo.frag)

@@ -22,8 +22,8 @@ void pickPhysicalDevice() {
 
 The graphics card that we'll end up selecting will be stored in a
 VkPhysicalDevice handle that is added as a new class member. This object will be
-implicitly destroyed when the VkInstance is destroyed, so we don't need to add a
-delete wrapper.
+implicitly destroyed when the VkInstance is destroyed, so we won't need to do
+anything new in the `cleanup` function.
 
 ```c++
 VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
@@ -277,4 +277,4 @@ Great, that's all we need for now to find the right physical device! The next
 step is to [create a logical device](!Drawing_a_triangle/Setup/Logical_device_and_queues)
 to interface with it.
 
-[C++ code](/code/physical_device_selection.cpp)
+[C++ code](/code/03_physical_device_selection.cpp)

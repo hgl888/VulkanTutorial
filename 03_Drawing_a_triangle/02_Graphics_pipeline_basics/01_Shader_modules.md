@@ -53,22 +53,30 @@ on to the fragment shader, like color and texture coordinates. These values will
 then be interpolated over the fragments by the rasterizer to produce a smooth
 gradient.
 
-Clip coordinates are [homogeneous coordinates](https://en.wikipedia.org/wiki/Homogeneous_coordinates)
+A *clip coordinate* is a four dimensional vector from the vertex shader that is
+subsequently turned into a *normalized device coordinate* by dividing the whole
+vector by its last component. These normalized device coordinates are
+[homogeneous coordinates](https://en.wikipedia.org/wiki/Homogeneous_coordinates)
 that map the framebuffer to a [-1, 1] by [-1, 1] coordinate system that looks
 like the following:
 
-![](/images/clip_coordinates.svg)
+![](/images/normalized_device_coordinates.svg)
 
-You should already be familiar with these if you have dabbed in computer
+You should already be familiar with these if you have dabbled in computer
 graphics before. If you have used OpenGL before, then you'll notice that the
 sign of the Y coordinates is now flipped. The Z coordinate now uses the same
 range as it does in Direct3D, from 0 to 1.
 
 For our first triangle we won't be applying any transformations, we'll just
-specify the positions of the three vertices directly in clip coordinates to
-create the following shape:
+specify the positions of the three vertices directly as normalized device
+coordinates to create the following shape:
 
 ![](/images/triangle_coordinates.svg)
+
+We can directly output normalized device coordinates by outputting them as clip
+coordinates from the vertex shader with the last component set to `1`. That way
+the division to transform clip coordinates to normalized device coordinates will
+not change anything.
 
 Normally these coordinates would be stored in a vertex buffer, but creating a
 vertex buffer in Vulkan and filling it with data is not trivial. Therefore I've
@@ -350,31 +358,36 @@ Before we can pass the code to the pipeline, we have to wrap it in a
 do that.
 
 ```c++
-void createShaderModule(const std::vector<char>& code, VDeleter<VkShaderModule>& shaderModule) {
+VkShaderModule createShaderModule(const std::vector<char>& code) {
 
 }
 ```
 
 The function will take a buffer with the bytecode as parameter and create a
-`VkShaderModule` from it. Instead of returning this handle directly, it's
-written to the variable specified for the second parameter, which makes it
-easier to wrap it in a deleter variable when calling `createShaderModule`.
+`VkShaderModule` from it.
 
 Creating a shader module is simple, we only need to specify a pointer to the
 buffer with the bytecode and the length of it. This information is specified in
-a `VkShaderModuleCreateInfo` structure.
+a `VkShaderModuleCreateInfo` structure. The one catch is that the size of the
+bytecode is specified in bytes, but the bytecode pointer is a `uint32_t` pointer
+rather than a `char` pointer. Therefore we will need to cast the pointer with
+`reinterpret_cast` as shown below. When you perform a cast like this, you also
+need to ensure that the data satisfies the alignment requirements of `uint32_t`.
+Lucky for us, the data is stored in an `std::vector` where the default allocator
+already ensures that the data satisfies the worst case alignment requirements.
 
 ```c++
 VkShaderModuleCreateInfo createInfo = {};
 createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 createInfo.codeSize = code.size();
-createInfo.pCode = (uint32_t*) code.data();
+createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 ```
 
 The `VkShaderModule` can then be created with a call to `vkCreateShaderModule`:
 
 ```c++
-if (vkCreateShaderModule(device, &createInfo, nullptr, shaderModule.replace()) != VK_SUCCESS) {
+VkShaderModule shaderModule;
+if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
     throw std::runtime_error("failed to create shader module!");
 }
 ```
@@ -382,24 +395,38 @@ if (vkCreateShaderModule(device, &createInfo, nullptr, shaderModule.replace()) !
 The parameters are the same as those in previous object creation functions: the
 logical device, pointer to create info structure, optional pointer to custom
 allocators and handle output variable. The buffer with the code can be freed
-immediately after creating the shader module.
+immediately after creating the shader module. Don't forget to return the created
+shader module:
+
+```c++
+return shaderModule;
+```
 
 The shader module objects are only required during the pipeline creation
 process, so instead of declaring them as class members, we'll make them local
 variables in the `createGraphicsPipeline` function:
 
 ```c++
-VDeleter<VkShaderModule> vertShaderModule{device, vkDestroyShaderModule};
-VDeleter<VkShaderModule> fragShaderModule{device, vkDestroyShaderModule};
+VkShaderModule vertShaderModule;
+VkShaderModule fragShaderModule;
 ```
 
-They will be automatically cleaned up when the graphics pipeline has been
-created and `createGraphicsPipeline` returns. Now just call the helper function
-we created and we're done:
+Call the helper function we created to load the shader modules:
 
 ```c++
-createShaderModule(vertShaderCode, vertShaderModule);
-createShaderModule(fragShaderCode, fragShaderModule);
+vertShaderModule = createShaderModule(vertShaderCode);
+fragShaderModule = createShaderModule(fragShaderCode);
+```
+
+They should be cleaned up when the graphics pipeline has been created and
+`createGraphicsPipeline` returns, so make sure that they are deleted at the end
+of the function:
+
+```c++
+    ...
+    vkDestroyShaderModule(device, fragShaderModule, nullptr);
+    vkDestroyShaderModule(device, vertShaderModule, nullptr);
+}
 ```
 
 ## Shader stage creation
@@ -464,6 +491,6 @@ VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShade
 That's all there is to describing the programmable stages of the pipeline. In
 the next chapter we'll look at the fixed-function stages.
 
-[C++ code](/code/shader_modules.cpp) /
-[Vertex shader](/code/shader_base.vert) /
-[Fragment shader](/code/shader_base.frag)
+[C++ code](/code/09_shader_modules.cpp) /
+[Vertex shader](/code/09_shader_base.vert) /
+[Fragment shader](/code/09_shader_base.frag)

@@ -60,17 +60,28 @@ the descriptor set after creating it, so we don't need this flag. You can leave
 `flags` to its default value of `0`.
 
 ```c++
-VDeleter<VkDescriptorPool> descriptorPool{device, vkDestroyDescriptorPool};
+VkDescriptorPool descriptorPool;
 
 ...
 
-if (vkCreateDescriptorPool(device, &poolInfo, nullptr, descriptorPool.replace()) != VK_SUCCESS) {
+if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
     throw std::runtime_error("failed to create descriptor pool!");
 }
 ```
 
 Add a new class member to store the handle of the descriptor pool and call
-`vkCreateDescriptorPool` to create it.
+`vkCreateDescriptorPool` to create it. The descriptor pool should be destroyed
+only at the end of the program, much like the other drawing related resources:
+
+```c++
+void cleanup() {
+    cleanupSwapChain();
+
+    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+
+    ...
+}
+```
 
 ## Descriptor set
 
@@ -109,7 +120,7 @@ Add a class member to hold the descriptor set handle and allocate it with
 `vkAllocateDescriptorSets`:
 
 ```c++
-VDeleter<VkDescriptorPool> descriptorPool{device, vkDestroyDescriptorPool};
+VkDescriptorPool descriptorPool;
 VkDescriptorSet descriptorSet;
 
 ...
@@ -119,7 +130,7 @@ if (vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet) != VK_SUCCESS) 
 }
 ```
 
-You don't need to use a deleter for descriptor sets, because they will be
+You don't need to explicitly clean up descriptor sets, because they will be
 automatically freed when the descriptor pool is destroyed. The call to
 `vkAllocateDescriptorSets` will allocate one descriptor set with one uniform
 buffer descriptor.
@@ -137,7 +148,7 @@ bufferInfo.offset = 0;
 bufferInfo.range = sizeof(UniformBufferObject);
 ```
 
-The configuration of descriptors is updated using the `vkUpdateDescriptorSets`
+If you're overwriting the whole buffer, like we are in this case, then it is is also possible to use the `VK_WHOLE_SIZE` value for the range. The configuration of descriptors is updated using the `vkUpdateDescriptorSets`
 function, which takes an array of `VkWriteDescriptorSet` structs as parameter.
 
 ```c++
@@ -182,8 +193,8 @@ vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
 
 The updates are applied using `vkUpdateDescriptorSets`. It accepts two kinds of
 arrays as parameters: an array of `VkWriteDescriptorSet` and an array of
-`VkCopyDescriptorSet`. The latter can be used to copy the configuration of
-descriptors, as its name implies.
+`VkCopyDescriptorSet`. The latter can be used to copy descriptors to each other,
+as its name implies.
 
 ## Using a descriptor set
 
@@ -208,7 +219,7 @@ visible. The problem is that because of the Y-flip we did in the projection
 matrix, the vertices are now being drawn in clockwise order instead of
 counter-clockwise order. This causes backface culling to kick in and prevents
 any geometry from being drawn. Go to the `createGraphicsPipeline` function and
-modify the `cullFace` in `VkPipelineRasterizationStateCreateInfo` to correct
+modify the `frontFace` in `VkPipelineRasterizationStateCreateInfo` to correct
 this:
 
 ```c++
@@ -221,7 +232,7 @@ Run your program again and you should now see the following:
 ![](/images/spinning_quad.png)
 
 The rectangle has changed into a square because the projection matrix now
-corrects for aspect ratio. The `updateUniformData` takes care of screen
+corrects for aspect ratio. The `updateUniformBuffer` takes care of screen
 resizing, so we don't need to recreate the descriptor set in
 `recreateSwapChain`.
 
@@ -240,6 +251,6 @@ You can use this feature to put descriptors that vary per-object and descriptors
 that are shared into separate descriptor sets. In that case you avoid rebinding
 most of the descriptors across draw calls which is potentially more efficient.
 
-[C++ code](/code/descriptor_set.cpp) / /
-[Vertex shader](/code/shader_ubo.vert) / /
-[Fragment shader](/code/shader_ubo.frag)
+[C++ code](/code/22_descriptor_set.cpp) /
+[Vertex shader](/code/21_shader_ubo.vert) /
+[Fragment shader](/code/21_shader_ubo.frag)

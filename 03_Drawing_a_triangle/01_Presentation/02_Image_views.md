@@ -8,12 +8,10 @@ In this chapter we'll write a `createImageViews` function that creates a basic
 image view for every image in the swap chain so that we can use them as color
 targets later on.
 
-First add a class member to store the image views in. Unlike the `VkImage`s, the
-`VkImageView` objects are created by us so we need to clean them up ourselves
-later.
+First add a class member to store the image views in:
 
 ```c++
-std::vector<VDeleter<VkImageView>> swapChainImageViews;
+std::vector<VkImageView> swapChainImageViews;
 ```
 
 Create the `createImageViews` function and call it right after swap chain
@@ -36,21 +34,19 @@ void createImageViews() {
 ```
 
 The first thing we need to do is resize the list to fit all of the image views
-we'll be creating. This is also the place where we'll actually define the
-deleter function.
+we'll be creating:
 
 ```c++
 void createImageViews() {
-    swapChainImageViews.resize(swapChainImages.size(), VDeleter<VkImageView>{device, vkDestroyImageView});
+    swapChainImageViews.resize(swapChainImages.size());
 
 }
 ```
 
-The `resize` function initializes all of the list items with the right deleter.
 Next, set up the loop that iterates over all of the swap chain images.
 
 ```c++
-for (uint32_t i = 0; i < swapChainImages.size(); i++) {
+for (size_t i = 0; i < swapChainImages.size(); i++) {
 
 }
 ```
@@ -105,18 +101,27 @@ different layers.
 Creating the image view is now a matter of calling `vkCreateImageView`:
 
 ```c++
-if (vkCreateImageView(device, &createInfo, nullptr, swapChainImageViews[i].replace()) != VK_SUCCESS) {
+if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
     throw std::runtime_error("failed to create image views!");
 }
 ```
 
-That's it, now run the program to verify that the image views are created
-properly and destroyed properly. Checking the latter requires enabling the
-validation layers, or putting a print statement in the deleter function.
+Unlike images, the image views were explicitly created by us, so we need to add
+a similar loop to destroy them again at the end of the program:
+
+```c++
+void cleanup() {
+    for (auto imageView : swapChainImageViews) {
+        vkDestroyImageView(device, imageView, nullptr);
+    }
+
+    ...
+}
+```
 
 An image view is sufficient to start using an image as a texture, but it's not
 quite ready to be used as a render target just yet. That requires one more step
 of indirection, known as a framebuffer. But first we'll have to set up the
 graphics pipeline.
 
-[C++ code](/code/image_views.cpp)
+[C++ code](/code/07_image_views.cpp)

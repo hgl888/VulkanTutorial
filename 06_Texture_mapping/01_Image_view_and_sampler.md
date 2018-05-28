@@ -13,7 +13,7 @@ Add a class member to hold a `VkImageView` for the texture image and create a
 new function `createTextureImageView` where we'll create it:
 
 ```c++
-VDeleter<VkImageView> textureImageView{device, vkDestroyImageView};
+VkImageView textureImageView;
 
 ...
 
@@ -53,7 +53,7 @@ I've left out the explicit `viewInfo.components` initialization, because
 image view by calling `vkCreateImageView`:
 
 ```c++
-if (vkCreateImageView(device, &viewInfo, nullptr, textureImageView.replace()) != VK_SUCCESS) {
+if (vkCreateImageView(device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS) {
     throw std::runtime_error("failed to create texture image view!");
 }
 ```
@@ -62,7 +62,7 @@ Because so much of the logic is duplicated from `createImageViews`, you may wish
 to abstract it into a new `createImageView` function:
 
 ```c++
-void createImageView(VkImage image, VkFormat format, VDeleter<VkImageView>& imageView) {
+VkImageView createImageView(VkImage image, VkFormat format) {
     VkImageViewCreateInfo viewInfo = {};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = image;
@@ -74,9 +74,12 @@ void createImageView(VkImage image, VkFormat format, VDeleter<VkImageView>& imag
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
-    if (vkCreateImageView(device, &viewInfo, nullptr, imageView.replace()) != VK_SUCCESS) {
+    VkImageView imageView;
+    if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
         throw std::runtime_error("failed to create texture image view!");
     }
+
+    return imageView;
 }
 ```
 
@@ -84,7 +87,7 @@ The `createTextureImageView` function can now be simplified to:
 
 ```c++
 void createTextureImageView() {
-    createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM, textureImageView);
+    textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM);
 }
 ```
 
@@ -92,12 +95,25 @@ And `createImageViews` can be simplified to:
 
 ```c++
 void createImageViews() {
-    swapChainImageViews.resize(swapChainImages.size(), VDeleter<VkImageView>{device, vkDestroyImageView});
+    swapChainImageViews.resize(swapChainImages.size());
 
     for (uint32_t i = 0; i < swapChainImages.size(); i++) {
-        createImageView(swapChainImages[i], swapChainImageFormat, swapChainImageViews[i]);
+        swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
     }
 }
+```
+
+Make sure to destroy the image view at the end of the program, right before
+destroying the image itself:
+
+```c++
+void cleanup() {
+    cleanupSwapChain();
+
+    vkDestroyImageView(device, textureImageView, nullptr);
+
+    vkDestroyImage(device, textureImage, nullptr);
+    vkFreeMemory(device, textureImageMemory, nullptr);
 ```
 
 ## Samplers
@@ -213,7 +229,7 @@ There is no graphics hardware available today that will use more than 16
 samples, because the difference is negligible beyond that point.
 
 ```c++
-samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK ;
+samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 ```
 
 The `borderColor` field specifies which color is returned when sampling beyond
@@ -240,7 +256,7 @@ samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
 
 If a comparison function is enabled, then texels will first be compared to a
 value, and the result of that comparison is used in filtering operations. This
-is mainly used for [percentage-closer filtering](http://http.developer.nvidia.com/GPUGems/gpugems_ch11.html)
+is mainly used for [percentage-closer filtering](https://developer.nvidia.com/gpugems/GPUGems/gpugems_ch11.html)
 on shadow maps. We'll look at this in a future chapter.
 
 ```c++
@@ -250,23 +266,23 @@ samplerInfo.minLod = 0.0f;
 samplerInfo.maxLod = 0.0f;
 ```
 
-All of these fields apply to mipmapping. We will look at mipmapping in a future
-chapter, but basically it's another type of filter that can be applied.
+All of these fields apply to mipmapping. We will look at mipmapping in a [later
+chapter](/Generating_Mipmaps), but basically it's another type of filter that can be applied.
 
 The functioning of the sampler is now fully defined. Add a class member to
 hold the handle of the sampler object and create the sampler with
 `vkCreateSampler`:
 
 ```c++
-VDeleter<VkImageView> textureImageView{device, vkDestroyImageView};
-VDeleter<VkSampler> textureSampler{device, vkDestroySampler};
+VkImageView textureImageView;
+VkSampler textureSampler;
 
 ...
 
 void createTextureSampler() {
     ...
 
-    if (vkCreateSampler(device, &samplerInfo, nullptr, textureSampler.replace()) != VK_SUCCESS) {
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
         throw std::runtime_error("failed to create texture sampler!");
     }
 }
@@ -278,9 +294,64 @@ can be applied to any image you want, whether it is 1D, 2D or 3D. This is
 different from many older APIs, which combined texture images and filtering into
 a single state.
 
+Destroy the sampler at the end of the program when we'll no longer be accessing
+the image:
+
+```c++
+void cleanup() {
+    cleanupSwapChain();
+
+    vkDestroySampler(device, textureSampler, nullptr);
+    vkDestroyImageView(device, textureImageView, nullptr);
+
+    ...
+}
+```
+
+## Anisotropy device feature
+
+If you run your program right now, you'll see a validation layer message like
+this:
+
+![](/images/validation_layer_anisotropy.png)
+
+That's because anisotropic filtering is actually an optional device feature. We
+need to update the `createLogicalDevice` function to request it:
+
+```c++
+VkPhysicalDeviceFeatures deviceFeatures = {};
+deviceFeatures.samplerAnisotropy = VK_TRUE;
+```
+
+And even though it is very unlikely that a modern graphics card will not support
+it, we should update `isDeviceSuitable` to check if it is available:
+
+```c++
+bool isDeviceSuitable(VkPhysicalDevice device) {
+    ...
+
+    VkPhysicalDeviceFeatures supportedFeatures;
+    vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+
+    return indices.isComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
+}
+```
+
+The `vkGetPhysicalDeviceFeatures` repurposes the `VkPhysicalDeviceFeatures`
+struct to indicate which features are supported rather than requested by setting
+the boolean values.
+
+Instead of enforcing the availability of anisotropic filtering, it's also
+possible to simply not use it by conditionally setting:
+
+```c++
+samplerInfo.anisotropyEnable = VK_FALSE;
+samplerInfo.maxAnisotropy = 1;
+```
+
 In the next chapter we will expose the image and sampler objects to the shaders
 to draw the texture onto the square.
 
-[C++ code](/code/sampler.cpp) /
-[Vertex shader](/code/shader_ubo.vert) /
-[Fragment shader](/code/shader_ubo.frag)
+[C++ code](/code/24_sampler.cpp) /
+[Vertex shader](/code/21_shader_ubo.vert) /
+[Fragment shader](/code/21_shader_ubo.frag)

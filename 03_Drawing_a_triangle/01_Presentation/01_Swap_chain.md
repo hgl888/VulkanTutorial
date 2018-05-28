@@ -1,5 +1,4 @@
-In this chapter we will look at the infrastructure that gives you images to
-render to that can be presented to the screen afterwards. This infrastructure is
+Vulkan does not have the concept of a "default framebuffer", hence it requires an infrastructure that will own the buffers we will render to before we visualize them on the screen. This infrastructure is
 known as the *swap chain* and must be created explicitly in Vulkan. The swap
 chain is essentially a queue of images that are waiting to be presented to the
 screen. Our application will acquire such an image to draw to it, and then
@@ -85,7 +84,7 @@ Enabling the extension just requires a small change to the logical device
 creation structure:
 
 ```c++
-createInfo.enabledExtensionCount = deviceExtensions.size();
+createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
 createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 ```
 
@@ -216,7 +215,7 @@ VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>
 }
 ```
 
-Each `VkSurfaceFormatKHR` entry contains `format` and `colorSpace` member. The
+Each `VkSurfaceFormatKHR` entry contains a `format` and a `colorSpace` member. The
 `format` member specifies the color channels and types. For example,
 `VK_FORMAT_B8G8R8A8_UNORM` means that we store the B, G, R and alpha channels in
 that order with an 8 bit unsigned integer for a total of 32 bits per pixel. The
@@ -279,14 +278,16 @@ There are four possible modes available in Vulkan:
 * `VK_PRESENT_MODE_IMMEDIATE_KHR`: Images submitted by your application are
 transferred to the screen right away, which may result in tearing.
 * `VK_PRESENT_MODE_FIFO_KHR`: The swap chain is a queue where the display takes
-an image from the front of the queue on a vertical blank and the program inserts
-rendered images at the back of the queue. If the queue is full then the program
-has to wait. This is most similar to vertical sync as found in modern games.
-* `VK_PRESENT_MODE_FIFO_RELAXED_KHR`: This mode only differs from the first one
-if the application is late and the queue was empty at the last vertical blank.
-Instead of waiting for the next vertical blank, the image is transferred right
-away when it finally arrives. This may result in visible tearing.
-* `VK_PRESENT_MODE_MAILBOX_KHR`: This is another variation of the first mode.
+an image from the front of the queue when the display is refreshed and the
+program inserts rendered images at the back of the queue. If the queue is full
+then the program has to wait. This is most similar to vertical sync as found in
+modern games. The moment that the display is refreshed is known as "vertical
+blank".
+* `VK_PRESENT_MODE_FIFO_RELAXED_KHR`: This mode only differs from the previous
+one if the application is late and the queue was empty at the last vertical
+blank. Instead of waiting for the next vertical blank, the image is transferred
+right away when it finally arrives. This may result in visible tearing.
+* `VK_PRESENT_MODE_MAILBOX_KHR`: This is another variation of the second mode.
 Instead of blocking the application when the queue is full, the images that are
 already queued are simply replaced with the newer ones. This mode can be used to
 implement triple buffering, which allows you to avoid tearing with significantly
@@ -523,34 +524,39 @@ you'll get the best performance by enabling clipping.
 createInfo.oldSwapchain = VK_NULL_HANDLE;
 ```
 
-That leaves one last field, `oldSwapChain`. With Vulkan it's possible that in
-your swap chain becomes invalid or unoptimized while your application is
+That leaves one last field, `oldSwapChain`. With Vulkan it's possible that your swap chain becomes invalid or unoptimized while your application is
 running, for example because the window was resized. In that case the swap chain
 actually needs to be recreated from scratch and a reference to the old one must
 be specified in this field. This is a complex topic that we'll learn more about
 in [a future chapter](!Drawing_a_triangle/Swap_chain_recreation). For now we'll
 assume that we'll only ever create one swap chain.
 
-Now add a class member to store the `VkSwapchainKHR` object with a proper
-deleter. Make sure to add it after `device` so that it gets cleaned up before
-the logical device is.
+Now add a class member to store the `VkSwapchainKHR` object:
 
 ```c++
-VDeleter<VkSwapchainKHR> swapChain{device, vkDestroySwapchainKHR};
+VkSwapchainKHR swapChain;
 ```
 
-Now creating the swap chain is as simple as calling `vkCreateSwapchainKHR`:
+Creating the swap chain is now as simple as calling `vkCreateSwapchainKHR`:
 
 ```c++
-if (vkCreateSwapchainKHR(device, &createInfo, nullptr, swapChain.replace()) != VK_SUCCESS) {
+if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
     throw std::runtime_error("failed to create swap chain!");
 }
 ```
 
 The parameters are the logical device, swap chain creation info, optional custom
 allocators and a pointer to the variable to store the handle in. No surprises
-there. Now run the application to ensure that the swap chain is created
-successfully!
+there. It should be cleaned up using `vkDestroySwapchainKHR` before the device:
+
+```c++
+void cleanup() {
+    vkDestroySwapchainKHR(device, swapChain, nullptr);
+    ...
+}
+```
+
+Now run the application to ensure that the swap chain is created successfully!
 
 Try removing the `createInfo.imageExtent = extent;` line with validation layers
 enabled. You'll see that one of the validation layers immediately catches the
@@ -570,7 +576,7 @@ std::vector<VkImage> swapChainImages;
 
 The images were created by the implementation for the swap chain and they will
 be automatically cleaned up once the swap chain has been destroyed, therefore we
-don't need a deleter here.
+don't need to add any cleanup code.
 
 I'm adding the code to retrieve the handles to the end of the `createSwapChain`
 function, right after the `vkCreateSwapchainKHR` call. Retrieving them is very
@@ -593,7 +599,7 @@ One last thing, store the format and extent we've chosen for the swap chain
 images in member variables. We'll need them in future chapters.
 
 ```c++
-VDeleter<VkSwapchainKHR> swapChain{device, vkDestroySwapchainKHR};
+VkSwapchainKHR swapChain;
 std::vector<VkImage> swapChainImages;
 VkFormat swapChainImageFormat;
 VkExtent2D swapChainExtent;
@@ -605,7 +611,8 @@ swapChainExtent = extent;
 ```
 
 We now have a set of images that can be drawn onto and can be presented to the
-window. The next two chapters will cover how we can set up the images as render
-targets and then we start looking into the actual drawing commands!
+window. The next chapter will begin to cover how we can set up the images as
+render targets and then we start looking into the actual graphics pipeline and
+drawing commands!
 
-[C++ code](/code/swap_chain_creation.cpp)
+[C++ code](/code/06_swap_chain_creation.cpp)

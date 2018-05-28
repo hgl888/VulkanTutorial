@@ -36,6 +36,18 @@ properties that are specified per-vertex in the vertex buffer, just like we
 manually specified a position and color per vertex using the two arrays. Make
 sure to recompile the vertex shader!
 
+Just like `fragColor`, the `layout(location = x)` annotations assign indices to
+the inputs that we can later use to reference them. It is important to know that
+some types, like `dvec3` 64 bit vectors, use multiple *slots*. That means that
+the index after it must be at least 2 higher:
+
+```glsl
+layout(location = 0) in dvec3 inPosition;
+layout(location = 2) in vec3 inColor;
+```
+
+You can find more info about the layout qualifier in the [OpenGL wiki](https://www.khronos.org/opengl/wiki/Layout_Qualifier_(GLSL)).
+
 ## Vertex data
 
 We're moving the vertex data from the shader code to an array in the code of our
@@ -202,7 +214,7 @@ auto bindingDescription = Vertex::getBindingDescription();
 auto attributeDescriptions = Vertex::getAttributeDescriptions();
 
 vertexInputInfo.vertexBindingDescriptionCount = 1;
-vertexInputInfo.vertexAttributeDescriptionCount = attributeDescriptions.size();
+vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
 vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
 vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 ```
@@ -213,6 +225,6 @@ validation layers enabled, you'll see that it complains that there is no vertex
 buffer bound to the binding. The next step is to create a vertex buffer and move
 the vertex data to it so the GPU is able to access it.
 
-[C++ code](/code/vertex_input.cpp) /
-[Vertex shader](/code/shader_vertexbuffer.vert) /
-[Fragment shader](/code/shader_vertexbuffer.frag)
+[C++ code](/code/17_vertex_input.cpp) /
+[Vertex shader](/code/17_shader_vertexbuffer.vert) /
+[Fragment shader](/code/17_shader_vertexbuffer.frag)

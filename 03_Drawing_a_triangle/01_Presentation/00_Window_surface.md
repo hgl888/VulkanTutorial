@@ -23,10 +23,9 @@ allows you to do that without hacks like creating an invisible window
 ## Window surface creation
 
 Start by adding a `surface` class member right below the debug callback.
-Surfaces are destroyed using the `vkDestroySurfaceKHR` call.
 
 ```c++
-VDeleter<VkSurfaceKHR> surface{instance, vkDestroySurfaceKHR};
+VkSurfaceKHR surface;
 ```
 
 Although the `VkSurfaceKHR` object and its usage is platform agnostic, its
@@ -49,7 +48,7 @@ important parameters: `hwnd` and `hinstance`. These are the handles to the
 window and the process.
 
 ```c++
-VkWin32SurfaceCreateInfoKHR createInfo;
+VkWin32SurfaceCreateInfoKHR createInfo = {};
 createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
 createInfo.hwnd = glfwGetWin32Window(window);
 createInfo.hinstance = GetModuleHandle(nullptr);
@@ -67,8 +66,7 @@ allocators and the variable for the surface handle to be stored in.
 ```c++
 auto CreateWin32SurfaceKHR = (PFN_vkCreateWin32SurfaceKHR) vkGetInstanceProcAddr(instance, "vkCreateWin32SurfaceKHR");
 
-if (!CreateWin32SurfaceKHR || CreateWin32SurfaceKHR(instance, &createInfo,
-   nullptr, surface.replace()) != VK_SUCCESS) {
+if (!CreateWin32SurfaceKHR || CreateWin32SurfaceKHR(instance, &createInfo, nullptr, &surface) != VK_SUCCESS) {
     throw std::runtime_error("failed to create window surface!");
 }
 ```
@@ -101,7 +99,7 @@ implementation of the function very straightforward:
 
 ```c++
 void createSurface() {
-    if (glfwCreateWindowSurface(instance, window, nullptr, surface.replace()) != VK_SUCCESS) {
+    if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
         throw std::runtime_error("failed to create window surface!");
     }
 }
@@ -109,7 +107,19 @@ void createSurface() {
 
 The parameters are the `VkInstance`, GLFW window pointer, custom allocators and
 pointer to `VkSurfaceKHR` variable. It simply passes through the `VkResult` from
-the relevant platform call.
+the relevant platform call. GLFW doesn't offer a special function for destroying
+a surface, but that can easily be done through the original API:
+
+```c++
+void cleanup() {
+        ...
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+        vkDestroyInstance(instance, nullptr);
+        ...
+    }
+```
+
+Make sure that the surface is destroyed before the instance.
 
 ## Querying for presentation support
 
@@ -200,8 +210,8 @@ for (int queueFamily : uniqueQueueFamilies) {
 And modify `VkDeviceCreateInfo` to point to the vector:
 
 ```c++
+createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
 createInfo.pQueueCreateInfos = queueCreateInfos.data();
-createInfo.queueCreateInfoCount = (uint32_t) queueCreateInfos.size();
 ```
 
 If the queue families are the same, then we only need to pass its index once.
@@ -215,4 +225,4 @@ In case the queue families are the same, the two handles will most likely have
 the same value now. In the next chapter we're going to look at swap chains and
 how they give us the ability to present images to the surface.
 
-[C++ code](/code/window_surface.cpp)
+[C++ code](/code/05_window_surface.cpp)

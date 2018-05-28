@@ -50,7 +50,11 @@ pipelineInfo.subpass = 0;
 ```
 
 And finally we have the reference to the render pass and the index of the sub
-pass where this graphics pipeline will be used.
+pass where this graphics pipeline will be used. It is also possible to use other
+render passes with this pipeline instead of this specific instance, but they
+have to be *compatible* with `renderPass`. The requirements for compatibility
+are described [here](https://www.khronos.org/registry/vulkan/specs/1.0/html/vkspec.html#renderpass-compatibility),
+but we won't be using that feature in this tutorial.
 
 ```c++
 pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
@@ -73,13 +77,13 @@ Now prepare for the final step by creating a class member to hold the
 `VkPipeline` object:
 
 ```c++
-VDeleter<VkPipeline> graphicsPipeline{device, vkDestroyPipeline};
+VkPipeline graphicsPipeline;
 ```
 
 And finally create the graphics pipeline:
 
 ```c++
-if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, graphicsPipeline.replace()) != VK_SUCCESS) {
+if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
     throw std::runtime_error("failed to create graphics pipeline!");
 }
 ```
@@ -96,11 +100,22 @@ store and reuse data relevant to pipeline creation across multiple calls to
 stored to a file. This makes it possible to significantly speed up pipeline
 creation at a later time. We'll get into this in the pipeline cache chapter.
 
+The graphics pipeline is required for all common drawing operations, so it
+should also only be destroyed at the end of the program:
+
+```c++
+void cleanup() {
+    vkDestroyPipeline(device, graphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+    ...
+}
+```
+
 Now run your program to confirm that all this hard work has resulted in a
 successful pipeline creation! We are already getting quite close to seeing
 something pop up on the screen. In the next couple of chapters we'll set up the
 actual framebuffers from the swap chain images and prepare the drawing commands.
 
-[C++ code](/code/graphics_pipeline_complete.cpp) /
-[Vertex shader](/code/shader_base.vert) /
-[Fragment shader](/code/shader_base.frag)
+[C++ code](/code/12_graphics_pipeline_complete.cpp) /
+[Vertex shader](/code/09_shader_base.vert) /
+[Fragment shader](/code/09_shader_base.frag)

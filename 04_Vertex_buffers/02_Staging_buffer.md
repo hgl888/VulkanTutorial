@@ -44,14 +44,14 @@ to move buffer creation to a helper function. Create a new function
 `createBuffer` and move the code in `createVertexBuffer` (except mapping) to it.
 
 ```c++
-void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VDeleter<VkBuffer>& buffer, VDeleter<VkDeviceMemory>& bufferMemory) {
+void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
     VkBufferCreateInfo bufferInfo = {};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = size;
     bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (vkCreateBuffer(device, &bufferInfo, nullptr, buffer.replace()) != VK_SUCCESS) {
+    if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to create buffer!");
     }
 
@@ -63,7 +63,7 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyF
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
 
-    if (vkAllocateMemory(device, &allocInfo, nullptr, bufferMemory.replace()) != VK_SUCCESS) {
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate buffer memory!");
     }
 
@@ -101,8 +101,8 @@ as temporary buffer and use a device local one as actual vertex buffer.
 void createVertexBuffer() {
     VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-    VDeleter<VkBuffer> stagingBuffer{device, vkDestroyBuffer};
-    VDeleter<VkDeviceMemory> stagingBufferMemory{device, vkFreeMemory};
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
     createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
     void* data;
@@ -229,28 +229,41 @@ createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERT
 copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 ```
 
-Run your program to verify that you're seeing the familiar triangle again. It
-may not be visible, but its vertex data is now being loaded from high
-performance memory. This will matter when we're going to start rendering more
-complex geometry.
+After copying the data from the staging buffer to the device buffer, we should
+clean it up:
+
+```c++
+    ...
+
+    copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingBufferMemory, nullptr);
+}
+```
+
+Run your program to verify that you're seeing the familiar triangle again. The
+improvement may not be visible right now, but its vertex data is now being
+loaded from high performance memory. This will matter when we're going to start
+rendering more complex geometry.
 
 ## Conclusion
 
 It should be noted that in a real world application, you're not supposed to
 actually call `vkAllocateMemory` for every individual buffer. The maximum number
-of memory allocations is limited by the `maxMemoryAllocationCount` physical
-device limit, which may be as low as `4096` even on high end hardware like an
-NVIDIA GTX 1080. The right way to allocate memory for a large number of objects
-is to create a custom allocator that splits up a single allocation among many
-different objects by using the `offset` parameters that we've seen in many
-functions.
+of simultaneous memory allocations is limited by the `maxMemoryAllocationCount`
+physical device limit, which may be as low as `4096` even on high end hardware
+like an NVIDIA GTX 1080. The right way to allocate memory for a large number of
+objects at the same time is to create a custom allocator that splits up a single
+allocation among many different objects by using the `offset` parameters that
+we've seen in many functions.
 
-You will currently have to write such an allocator yourself, but the author
-expects that there will be a library at some point that can be integrated into
-any Vulkan program to properly handle allocations. It's okay to use a separate
-allocation for every resource for this tutorial, because we won't come close to
+You can either implement such an allocator yourself, or use the
+[VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator)
+library provided by the GPUOpen initiative. However, for this tutorial it's okay
+to use a separate allocation for every resource, because we won't come close to
 hitting any of these limits for now.
 
-[C++ code](/code/staging_buffer.cpp) /
-[Vertex shader](/code/shader_vertexbuffer.vert) /
-[Fragment shader](/code/shader_vertexbuffer.frag)
+[C++ code](/code/19_staging_buffer.cpp) /
+[Vertex shader](/code/17_shader_vertexbuffer.vert) /
+[Fragment shader](/code/17_shader_vertexbuffer.frag)

@@ -130,9 +130,9 @@ running at once. The depth image will again require the trifecta of resources:
 image, memory and image view.
 
 ```c++
-VDeleter<VkImage> depthImage{device, vkDestroyImage};
-VDeleter<VkDeviceMemory> depthImageMemory{device, vkFreeMemory};
-VDeleter<VkImageView> depthImageView{device, vkDestroyImageView};
+VkImage depthImage;
+VkDeviceMemory depthImageMemory;
+VkImageView depthImageView;
 ```
 
 Create a new function `createDepthResources` to set up these resources:
@@ -272,7 +272,7 @@ We now have all the required information to invoke our `createImage` and
 
 ```c++
 createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-createImageView(depthImage, depthFormat, depthImageView);
+depthImageView = createImageView(depthImage, depthFormat);
 ```
 
 However, the `createImageView` function currently assumes that the subresource
@@ -280,7 +280,7 @@ is always the `VK_IMAGE_ASPECT_COLOR_BIT`, so we will need to turn that field
 into a parameter:
 
 ```c++
-void createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, VDeleter<VkImageView>& imageView) {
+VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
     ...
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     ...
@@ -290,11 +290,11 @@ void createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFl
 Update all calls to this function to use the right aspect:
 
 ```c++
-createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, swapChainImageViews[i]);
+swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
 ...
-createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, depthImageView);
+depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 ...
-createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, textureImageView);
+textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
 ```
 
 That's it for creating the depth image. We don't need to map it or copy another
@@ -327,27 +327,38 @@ if (newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
 Although we're not using the stencil component, we do need to include it in the
 layout transitions of the depth image.
 
-Finally, add the correct access masks:
+Finally, add the correct access masks and pipeline stages:
 
 ```c++
-if (oldLayout == VK_IMAGE_LAYOUT_PREINITIALIZED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
-    barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-} else if (oldLayout == VK_IMAGE_LAYOUT_PREINITIALIZED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-    barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
     barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
 } else {
     throw std::invalid_argument("unsupported layout transition!");
 }
 ```
 
-The image is now completely ready for usage as depth attachment.
+The depth buffer will be read from to perform depth tests to see if a fragment
+is visible, and will be written to when a new fragment is drawn. The reading
+happens in the `VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT` stage and the
+writing in the `VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT`. You should pick the
+earliest pipeline stage that matches the specified operations, so that it is
+ready for usage as depth attachment when it needs to be.
 
 ## Render pass
 
@@ -362,15 +373,15 @@ depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 ```
 
 The `format` should be the same as the depth image itself. This time we don't
 care about storing the depth data (`storeOp`), because it will not be used after
 drawing has finished. This may allow the hardware to perform additional
-optimizations. The layout of the image will not change during rendering, so the
-`initialLayout` and `finalLayout` are the same.
+optimizations. Just like the color buffer, we don't care about the previous
+depth contents, so we can use `VK_IMAGE_LAYOUT_UNDEFINED` as `initialLayout`.
 
 ```c++
 VkAttachmentReference depthAttachmentRef = {};
@@ -396,7 +407,7 @@ buffers.
 std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
 VkRenderPassCreateInfo renderPassInfo = {};
 renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-renderPassInfo.attachmentCount = attachments.size();
+renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
 renderPassInfo.pAttachments = attachments.data();
 renderPassInfo.subpassCount = 1;
 renderPassInfo.pSubpasses = &subpass;
@@ -422,7 +433,7 @@ std::array<VkImageView, 2> attachments = {
 VkFramebufferCreateInfo framebufferInfo = {};
 framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 framebufferInfo.renderPass = renderPass;
-framebufferInfo.attachmentCount = attachments.size();
+framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
 framebufferInfo.pAttachments = attachments.data();
 framebufferInfo.width = swapChainExtent.width;
 framebufferInfo.height = swapChainExtent.height;
@@ -456,7 +467,7 @@ std::array<VkClearValue, 2> clearValues = {};
 clearValues[0].color = {0.0f, 0.0f, 0.0f, 1.0f};
 clearValues[1].depthStencil = {1.0f, 0};
 
-renderPassInfo.clearValueCount = clearValues.size();
+renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
 renderPassInfo.pClearValues = clearValues.data();
 ```
 
@@ -537,6 +548,8 @@ function to recreate the depth resources in that case:
 ```c++
 void recreateSwapChain() {
     vkDeviceWaitIdle(device);
+    
+    cleanupSwapChain();
 
     createSwapChain();
     createImageViews();
@@ -548,10 +561,22 @@ void recreateSwapChain() {
 }
 ```
 
+The cleanup operations should happen in the swap chain cleanup function:
+
+```c++
+void cleanupSwapChain() {
+    vkDestroyImageView(device, depthImageView, nullptr);
+    vkDestroyImage(device, depthImage, nullptr);
+    vkFreeMemory(device, depthImageMemory, nullptr);
+
+    ...
+}
+```
+
 Congratulations, your application is now finally ready to render arbitrary 3D
 geometry and have it look right. We're going to try this out in the next chapter
 by drawing a textured model!
 
-[C++ code](/code/depth_buffering.cpp) /
-[Vertex shader](/code/shader_textures.vert) /
-[Fragment shader](/code/shader_textures.frag)
+[C++ code](/code/26_depth_buffering.cpp) /
+[Vertex shader](/code/26_shader_depth.vert) /
+[Fragment shader](/code/26_shader_depth.frag)

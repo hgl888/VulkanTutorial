@@ -12,7 +12,7 @@ pools manage the memory that is used to store the buffers and command buffers
 are allocated from them. Add a new class member to store a `VkCommandPool`:
 
 ```c++
-VDeleter<VkCommandPool> commandPool{device, vkDestroyCommandPool};
+VkCommandPool commandPool;
 ```
 
 Then create a new function `createCommandPool` and call it from `initVulkan`
@@ -69,13 +69,23 @@ execute them many times in the main loop, so we're not going to use either of
 these flags.
 
 ```c++
-if (vkCreateCommandPool(device, &poolInfo, nullptr, commandPool.replace()) != VK_SUCCESS) {
+if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
     throw std::runtime_error("failed to create command pool!");
 }
 ```
 
 Finish creating the command pool using the `vkCreateCommandPool` function. It
-doesn't have any special parameters.
+doesn't have any special parameters. Commands will be used throughout the
+program to draw things on the screen, so the pool should only be destroyed at
+the end:
+
+```c++
+void cleanup() {
+    vkDestroyCommandPool(device, commandPool, nullptr);
+
+    ...
+}
+```
 
 ## Command buffer allocation
 
@@ -83,8 +93,8 @@ We can now start allocating command buffers and recording drawing commands in
 them. Because one of the drawing commands involves binding the right
 `VkFramebuffer`, we'll actually have to record a command buffer for every image
 in the swap chain once again. To that end, create a list of `VkCommandBuffer`
-objects as class member. Command buffers will be automatically freed when their
-command pool is destroyed, so we don't need a `VDeleter`.
+objects as a class member. Command buffers will be automatically freed when their
+command pool is destroyed, so we don't need an explicit cleanup.
 
 ```c++
 std::vector<VkCommandBuffer> commandBuffers;
@@ -115,10 +125,6 @@ void createCommandBuffers() {
     commandBuffers.resize(swapChainFramebuffers.size());
 }
 ```
-
-Cleaning up command buffers involves a slightly different function than other
-objects. The `vkFreeCommandBuffers` function takes the command pool and an array
-of command buffers as parameters.
 
 Command buffers are allocated with the `vkAllocateCommandBuffers` function,
 which takes a `VkCommandBufferAllocateInfo` struct as parameter that specifies
@@ -161,7 +167,9 @@ for (size_t i = 0; i < commandBuffers.size(); i++) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
     beginInfo.pInheritanceInfo = nullptr; // Optional
 
-    vkBeginCommandBuffer(commandBuffers[i], &beginInfo);
+    if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS) {
+        throw std::runtime_error("failed to begin recording command buffer!");
+    }
 }
 ```
 
@@ -270,7 +278,7 @@ have 3 vertices to draw.
 that.
 * `firstVertex`: Used as an offset into the vertex buffer, defines the lowest
 value of `gl_VertexIndex`.
-* `firstIntance`: Used as an offset for instanced rendering, defines the lowest
+* `firstInstance`: Used as an offset for instanced rendering, defines the lowest
 value of `gl_InstanceIndex`.
 
 ## Finishing up
@@ -293,6 +301,6 @@ In the next chapter we'll write the code for the main loop, which will acquire
 an image from the swap chain, execute the right command buffer and return the
 finished image to the swap chain.
 
-[C++ code](/code/command_buffers.cpp) /
-[Vertex shader](/code/shader_base.vert) /
-[Fragment shader](/code/shader_base.frag)
+[C++ code](/code/14_command_buffers.cpp) /
+[Vertex shader](/code/09_shader_base.vert) /
+[Fragment shader](/code/09_shader_base.frag)

@@ -28,7 +28,7 @@ void initVulkan() {
     createCommandPool();
     createVertexBuffer();
     createCommandBuffers();
-    createSemaphores();
+    createSyncObjects();
 }
 
 ...
@@ -74,7 +74,7 @@ We can now create the buffer with `vkCreateBuffer`. Define a class member to
 hold the buffer handle and call it `vertexBuffer`.
 
 ```c++
-VDeleter<VkBuffer> vertexBuffer{device, vkDestroyBuffer};
+VkBuffer vertexBuffer;
 
 ...
 
@@ -85,9 +85,23 @@ void createVertexBuffer() {
     bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (vkCreateBuffer(device, &bufferInfo, nullptr, vertexBuffer.replace()) != VK_SUCCESS) {
+    if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to create vertex buffer!");
     }
+}
+```
+
+The buffer should be available for use in rendering commands until the end of
+the program and it does not depend on the swap chain, so we'll clean it up in
+the original `cleanup` function:
+
+```c++
+void cleanup() {
+    cleanupSwapChain();
+
+    vkDestroyBuffer(device, vertexBuffer, nullptr);
+
+    ...
 }
 ```
 
@@ -175,11 +189,11 @@ for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
 }
 ```
 
-In the future we may have more than one desirable property, so we should check
-if the result of the bitwise AND is not just non-zero, but equal to the desired
-properties bit field. If there is a memory type suitable for the buffer that
-also has all of the properties we need, then we return its index, otherwise we
-throw an exception.
+We may have more than one desirable property, so we should check if the result
+of the bitwise AND is not just non-zero, but equal to the desired properties bit
+field. If there is a memory type suitable for the buffer that also has all of
+the properties we need, then we return its index, otherwise we throw an
+exception.
 
 ## Memory allocation
 
@@ -199,19 +213,15 @@ desired property. Create a class member to store the handle to the memory and
 allocate it with `vkAllocateMemory`.
 
 ```c++
-VDeleter<VkBuffer> vertexBuffer{device, vkDestroyBuffer};
-VDeleter<VkDeviceMemory> vertexBufferMemory{device, vkFreeMemory};
+VkBuffer vertexBuffer;
+VkDeviceMemory vertexBufferMemory;
 
 ...
 
-if (vkAllocateMemory(device, &allocInfo, nullptr, vertexBufferMemory.replace()) != VK_SUCCESS) {
+if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
     throw std::runtime_error("failed to allocate vertex buffer memory!");
 }
 ```
-
-Note that specifying the `vertexBuffer` and `vertexBufferMemory` members in this
-order will cause the memory to be freed before the buffer is destroyed, but
-that's allowed as long as the buffer is no longer used.
 
 If memory allocation was successful, then we can now associate this memory with
 the buffer using `vkBindBufferMemory`:
@@ -220,10 +230,23 @@ the buffer using `vkBindBufferMemory`:
 vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
 ```
 
-The first two parameters are self-explanatory and the third parameter is the
+The first three parameters are self-explanatory and the fourth parameter is the
 offset within the region of memory. Since this memory is allocated specifically
 for this the vertex buffer, the offset is simply `0`. If the offset is non-zero,
 then it is required to be divisible by `memRequirements.alignment`.
+
+Of course, just like dynamic memory allocation in C++, the memory should be
+freed at some point. Memory that is bound to a buffer object may be freed once
+the buffer is no longer used, so let's free it after the buffer has been
+destroyed:
+
+```c++
+void cleanup() {
+    cleanupSwapChain();
+
+    vkDestroyBuffer(device, vertexBuffer, nullptr);
+    vkFreeMemory(device, vertexBufferMemory, nullptr);
+```
 
 ## Filling the vertex buffer
 
@@ -279,7 +302,7 @@ VkBuffer vertexBuffers[] = {vertexBuffer};
 VkDeviceSize offsets[] = {0};
 vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
 
-vkCmdDraw(commandBuffers[i], vertices.size(), 1, 0, 0);
+vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 ```
 
 The `vkCmdBindVertexBuffers` function is used to bind vertex buffers to
@@ -312,6 +335,6 @@ Run the program again and you should see the following:
 In the next chapter we'll look at a different way to copy vertex data to a
 vertex buffer that results in better performance, but takes some more work.
 
-[C++ code](/code/vertex_buffer.cpp) /
-[Vertex shader](/code/shader_vertexbuffer.vert) /
-[Fragment shader](/code/shader_vertexbuffer.frag)
+[C++ code](/code/18_vertex_buffer.cpp) /
+[Vertex shader](/code/17_shader_vertexbuffer.vert) /
+[Fragment shader](/code/17_shader_vertexbuffer.frag)

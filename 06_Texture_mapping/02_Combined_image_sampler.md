@@ -28,7 +28,7 @@ samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
 VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-layoutInfo.bindingCount = bindings.size();
+layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
 layoutInfo.pBindings = bindings.data();
 ```
 
@@ -53,7 +53,7 @@ poolSizes[1].descriptorCount = 1;
 
 VkDescriptorPoolCreateInfo poolInfo = {};
 poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-poolInfo.poolSizeCount = poolSizes.size();
+poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
 poolInfo.pPoolSizes = poolSizes.data();
 poolInfo.maxSets = 1;
 ```
@@ -92,7 +92,7 @@ descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 descriptorWrites[1].descriptorCount = 1;
 descriptorWrites[1].pImageInfo = &imageInfo;
 
-vkUpdateDescriptorSets(device, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
+vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 ```
 
 The descriptor must be updated with this image info, just like the buffer. This
@@ -151,10 +151,10 @@ square.
 
 ```c++
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
 };
 ```
 
@@ -265,6 +265,6 @@ when combined with images that are also written to in framebuffers. You can use
 these images as inputs to implement cool effects like post-processing and camera
 displays within the 3D world.
 
-[C++ code](/code/texture_mapping.cpp) /
-[Vertex shader](/code/shader_textures.vert) /
-[Fragment shader](/code/shader_textures.frag)
+[C++ code](/code/25_texture_mapping.cpp) /
+[Vertex shader](/code/25_shader_textures.vert) /
+[Fragment shader](/code/25_shader_textures.frag)

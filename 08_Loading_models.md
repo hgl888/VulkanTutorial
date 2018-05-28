@@ -88,8 +88,8 @@ non-const containers as class members:
 ```c++
 std::vector<Vertex> vertices;
 std::vector<uint32_t> indices;
-VDeleter<VkBuffer> vertexBuffer{device, vkDestroyBuffer};
-VDeleter<VkDeviceMemory> vertexBufferMemory{device, vkFreeMemory};
+VkBuffer vertexBuffer;
+VkDeviceMemory vertexBufferMemory;
 ```
 
 You should change the type of the indices from `uint16_t` to `uint32_t`, because
@@ -249,14 +249,14 @@ Unfortunately we're not really taking advantage of the index buffer yet. The
 vertices are included in multiple triangles. We should keep only the unique
 vertices and use the index buffer to reuse them whenever they come up. A
 straightforward way to implement this is to use a `map` or `unordered_map` to
-keep track of the unique vertices and their index:
+keep track of the unique vertices and respective indices:
 
 ```c++
 #include <unordered_map>
 
 ...
 
-std::unordered_map<Vertex, int> uniqueVertices = {};
+std::unordered_map<Vertex, uint32_t> uniqueVertices = {};
 
 for (const auto& shape : shapes) {
     for (const auto& index : shape.mesh.indices) {
@@ -265,7 +265,7 @@ for (const auto& shape : shapes) {
         ...
 
         if (uniqueVertices.count(vertex) == 0) {
-            uniqueVertices[vertex] = vertices.size();
+            uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
             vertices.push_back(vertex);
         }
 
@@ -303,7 +303,7 @@ namespace std {
     template<> struct hash<Vertex> {
         size_t operator()(Vertex const& vertex) const {
             return ((hash<glm::vec3>()(vertex.pos) ^
-                   (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ 
+                   (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
                    (hash<glm::vec2>()(vertex.texCoord) << 1);
         }
     };
@@ -314,34 +314,20 @@ This code should be placed outside the `Vertex` struct. The hash functions for
 the GLM types need to be included using the following header:
 
 ```c++
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 ```
+
+The hash functions are defined in the `gtx` folder, which means that it is
+technically still an experimental extension to GLM. Therefore you need to define
+`GLM_ENABLE_EXPERIMENTAL` to use it. It means that the API could change with a
+new version of GLM in the future, but in practice the API is very stable.
 
 You should now be able to successfully compile and run your program. If you
 check the size of `vertices`, then you'll see that it has shrunk down from
 1,500,000 to 265,645! That means that each vertex is reused in an average number
 of ~6 triangles. This definitely saves us a lot of GPU memory.
 
-## Conclusion
-
-It has taken a lot of work to get to this point, but now you finally have a good
-base for a Vulkan program. The knowledge of the basic principles of Vulkan that
-you now possess should be sufficient to start exploring more of the features,
-like:
-
-* Push constants
-* Instanced rendering
-* Dynamic uniforms
-* Separate images and sampler descriptors
-* Pipeline cache
-* Multi-threaded command buffer generation
-* Multiple subpasses
-
-The current program can be extended in many ways, like adding Blinn-Phong
-lighting, post-processing effects and shadow mapping. You should be able to
-learn how these effects work from tutorials for other APIs, because despite
-Vulkan's explicitness, many concepts still work the same.
-
-[C++ code](/code/model_loading.cpp) /
-[Vertex shader](/code/shader_textures.vert) /
-[Fragment shader](/code/shader_textures.frag)
+[C++ code](/code/27_model_loading.cpp) /
+[Vertex shader](/code/26_shader_depth.vert) /
+[Fragment shader](/code/26_shader_depth.frag)

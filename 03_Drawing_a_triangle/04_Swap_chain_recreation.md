@@ -30,128 +30,104 @@ shouldn't touch resources that may still be in use. Obviously, the first thing
 we'll have to do is recreate the swap chain itself. The image views need to be
 recreated because they are based directly on the swap chain images. The render
 pass needs to be recreated because it depends on the format of the swap chain
-images. Viewport and scissor rectangle size is specified during graphics
-pipeline creation, so the pipeline also needs to be rebuilt. It is possible to
-avoid this by using dynamic state for the viewports and scissor rectangles.
-Finally, the framebuffers and command buffers also directly depend on the swap
-chain images.
+images. It is rare for the swap chain image format to change during an operation
+like a window resize, but it should still be handled. Viewport and scissor
+rectangle size is specified during graphics pipeline creation, so the pipeline
+also needs to be rebuilt. It is possible to avoid this by using dynamic state
+for the viewports and scissor rectangles. Finally, the framebuffers and command
+buffers also directly depend on the swap chain images.
 
-Because of our handy `VDeleter` construct, most of the functions will work fine
-for recreation and will automatically clean up the old objects. However, the
-`createSwapChain` and `createCommandBuffers` functions still need some
-adjustments.
+To make sure that the old versions of these objects are cleaned up before
+recreating them, we should move some of the cleanup code to a separate function
+that we can call from the `recreateSwapChain` function. Let's call it
+`cleanupSwapChain`:
 
 ```c++
-VkSwapchainKHR oldSwapChain = swapChain;
-createInfo.oldSwapchain = oldSwapChain;
+void cleanupSwapChain() {
 
-VkSwapchainKHR newSwapChain;
-if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &newSwapChain) != VK_SUCCESS) {
-    throw std::runtime_error("failed to create swap chain!");
 }
 
-swapChain = newSwapChain;
-```
+void recreateSwapChain() {
+    vkDeviceWaitIdle(device);
 
-We need to pass the previous swap chain object in the `oldSwapchain` parameter
-of `VkSwapchainCreateInfoKHR` to indicate that we intend to replace it. The old
-swap chain needs to stick around until after the new swap chain has been
-created, which means that we can't directly write the new handle to `swapChain`.
-The `VDeleter` would clear the old object before `vkCreateSwapchainKHR` has a
-chance to execute. That's why we use the temporary `newSwapChain` variable.
+    cleanupSwapChain();
 
-```c++
-swapChain = newSwapChain;
-```
-
-This line will actually destroy the old swap chain and replace the handle with
-the handle of the new swap chain.
-
-The problem with `createCommandBuffers` is that it doesn't free the old command
-buffers. There are two ways to solve this:
-
-* Call `createCommandPool` as well, which will automatically free the old
-command buffers
-* Extend `createCommandBuffers` to free any previous command buffers
-
-As there isn't really a need to recreate the command pool itself, I've chosen to
-go for the second solution in this tutorial.
-
-```c++
-if (commandBuffers.size() > 0) {
-    vkFreeCommandBuffers(device, commandPool, commandBuffers.size(), commandBuffers.data());
-}
-
-commandBuffers.resize(swapChainFramebuffers.size());
-```
-
-The `createCommandBuffers` function now first checks if the `commandBuffers`
-vector already contains previous command buffers, and if so, frees them. That's
-all it takes to recreate the swap chain!
-
-## Window resizing
-
-Now we just need to figure out when swap chain recreation is necessary and call
-our new `recreateSwapChain` function. One of the most common conditions is
-resizing of the window. Let's make the window resizable and catch that event.
-Change the `initWindow` function to no longer include the `GLFW_RESIZABLE` line
-or change its argument from `GLFW_FALSE` to `GLFW_TRUE`.
-
-```c++
-void initWindow() {
-    glfwInit();
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
-
-    glfwSetWindowUserPointer(window, this);
-    glfwSetWindowSizeCallback(window, HelloTriangleApplication::onWindowResized);
-}
-
-...
-
-static void onWindowResized(GLFWwindow* window, int width, int height) {
-    if (width == 0 || height == 0) return;
-
-    HelloTriangleApplication* app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
-    app->recreateSwapChain();
+    createSwapChain();
+    createImageViews();
+    createRenderPass();
+    createGraphicsPipeline();
+    createFramebuffers();
+    createCommandBuffers();
 }
 ```
 
-The `glfwSetWindowSizeCallback` function can be used to specify a callback for
-the window resize event. Unfortunately it only accepts a function pointer as
-argument, so we can't directly use a member function. Luckily GLFW allows us to
-store an arbitrary pointer in the window object with `glfwSetWindowUserPointer`,
-so we can specify a static class member and get the original class instance back
-with `glfwGetWindowUserPointer`. We can then proceed to call
-`recreateSwapChain`, but only if the size of the window is non-zero. This case
-occurs when the window is minimized and it will cause swap chain creation to
-fail.
-
-The `chooseSwapExtent` function should also be updated to take the current width
-and height of the window into account instead of the initial `WIDTH` and
-`HEIGHT`:
+we'll move the cleanup code of all objects that are recreated as part of a swap
+chain refresh from `cleanup` to `cleanupSwapChain`:
 
 ```c++
-int width, height;
-glfwGetWindowSize(window, &width, &height);
+void cleanupSwapChain() {
+    for (size_t i = 0; i < swapChainFramebuffers.size(); i++) {
+        vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
+    }
 
-VkExtent2D actualExtent = {width, height};
+    vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
+
+    vkDestroyPipeline(device, graphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+    vkDestroyRenderPass(device, renderPass, nullptr);
+
+    for (size_t i = 0; i < swapChainImageViews.size(); i++) {
+        vkDestroyImageView(device, swapChainImageViews[i], nullptr);
+    }
+
+    vkDestroySwapchainKHR(device, swapChain, nullptr);
+}
+
+void cleanup() {
+    cleanupSwapChain();
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+        vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+        vkDestroyFence(device, inFlightFences[i], nullptr);
+    }
+
+    vkDestroyCommandPool(device, commandPool, nullptr);
+
+    vkDestroyDevice(device, nullptr);
+    DestroyDebugReportCallbackEXT(instance, callback, nullptr);
+    vkDestroySurfaceKHR(instance, surface, nullptr);
+    vkDestroyInstance(instance, nullptr);
+
+    glfwDestroyWindow(window);
+
+    glfwTerminate();
+}
 ```
+
+We could recreate the command pool from scratch, but that is rather wasteful.
+Instead I've opted to clean up the existing command buffers with the
+`vkFreeCommandBuffers` function. This way we can reuse the existing pool to
+allocate the new command buffers.
+
+That's all it takes to recreate the swap chain! However, the disadvantage of
+this approach is that we need to stop all rendering before creating the new swap
+chain. It is possible to create a new swap chain while drawing commands on an
+image from the old swap chain are still in-flight. You need to pass the previous
+swap chain to the `oldSwapChain` field in the `VkSwapchainCreateInfoKHR` struct
+and destroy the old swap chain as soon as you've finished using it.
 
 ## Suboptimal or out-of-date swap chain
 
-It is also possible for Vulkan to tell us that the swap chain is no longer
-compatible during presentation. The `vkAcquireNextImageKHR` and
+Now we just need to figure out when swap chain recreation is necessary and call
+our new `recreateSwapChain` function. Luckily, Vulkan will usually just tell us that the swap chain is no longer adequate during presentation. The `vkAcquireNextImageKHR` and
 `vkQueuePresentKHR` functions can return the following special values to
 indicate this.
 
 * `VK_ERROR_OUT_OF_DATE_KHR`: The swap chain has become incompatible with the
-surface and can no longer be used for rendering.
+surface and can no longer be used for rendering. Usually happens after a window resize.
 * `VK_SUBOPTIMAL_KHR`: The swap chain can still be used to successfully present
-to the surface, but the surface properties are no longer matched exactly. For
-example, the platform may be simply resizing the image to fit the window now.
+to the surface, but the surface properties are no longer matched exactly.
 
 ```c++
 VkResult result = vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
@@ -180,6 +156,8 @@ if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
 } else if (result != VK_SUCCESS) {
     throw std::runtime_error("failed to present swap chain image!");
 }
+
+vkQueueWaitIdle(presentQueue);
 ```
 
 The `vkQueuePresentKHR` function returns the same values with the same meaning.
@@ -191,6 +169,6 @@ Congratulations, you've now finished your very first well-behaved Vulkan
 program! In the next chapter we're going to get rid of the hardcoded vertices in
 the vertex shader and actually use a vertex buffer.
 
-[C++ code](/code/swap_chain_recreation.cpp) /
-[Vertex shader](/code/shader_base.vert) /
-[Fragment shader](/code/shader_base.frag)
+[C++ code](/code/16_swap_chain_recreation.cpp) /
+[Vertex shader](/code/09_shader_base.vert) /
+[Fragment shader](/code/09_shader_base.frag)

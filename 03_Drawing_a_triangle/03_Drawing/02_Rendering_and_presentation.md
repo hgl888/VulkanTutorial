@@ -10,8 +10,6 @@ void mainLoop() {
         glfwPollEvents();
         drawFrame();
     }
-
-    glfwDestroyWindow(window);
 }
 
 ...
@@ -55,8 +53,8 @@ presentation can happen. Create two class members to store these semaphore
 objects:
 
 ```c++
-VDeleter<VkSemaphore> imageAvailableSemaphore{device, vkDestroySemaphore};
-VDeleter<VkSemaphore> renderFinishedSemaphore{device, vkDestroySemaphore};
+VkSemaphore imageAvailableSemaphore;
+VkSemaphore renderFinishedSemaphore;
 ```
 
 To create the semaphores, we'll add the last `create` function for this part of
@@ -102,17 +100,26 @@ Future versions of the Vulkan API or extensions may add functionality for the
 the semaphores follows the familiar pattern with `vkCreateSemaphore`:
 
 ```c++
-if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, imageAvailableSemaphore.replace()) != VK_SUCCESS ||
-    vkCreateSemaphore(device, &semaphoreInfo, nullptr, renderFinishedSemaphore.replace()) != VK_SUCCESS) {
+if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
+    vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS) {
 
     throw std::runtime_error("failed to create semaphores!");
 }
 ```
 
+The semaphores should be cleaned up at the end of the program, when all commands
+have finished and no more synchronization is necessary:
+
+```c++
+void cleanup() {
+    vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+    vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+```
+
 ## Acquiring an image from the swap chain
 
 As mentioned before, the first thing we need to do in the `drawFrame` function
-is acquiring an image from the swap chain. Recall that the swap chain is an
+is acquire an image from the swap chain. Recall that the swap chain is an
 extension feature, so we must use a function with the `vk*KHR` naming
 convention:
 
@@ -160,7 +167,7 @@ begins and in which stage(s) of the pipeline to wait. We want to wait with
 writing colors to the image until it's available, so we're specifying the stage
 of the graphics pipeline that writes to the color attachment. That means that
 theoretically the implementation can already start executing our vertex shader
-and such while the image is not available yet. Each entry in the `waitStages`
+and such while the image is not yet available. Each entry in the `waitStages`
 array corresponds to the semaphore with the same index in `pWaitSemaphores`.
 
 ```c++
@@ -208,11 +215,11 @@ start of the render pass and at the end of the render pass, but the former does
 not occur at the right time. It assumes that the transition occurs at the start
 of the pipeline, but we haven't acquired the image yet at that point! There are
 two ways to deal with this problem. We could change the `waitStages` for the
-`imageAvailableSemaphore` to `VK_PIPELINE_STAGE_TOP_OF_PIPELINE_BIT` to ensure
-that the render passes don't begin until the image is available, or we can make
-the render pass wait for the `VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT`
-stage. I've decided to go with the second option here, because it's a good
-excuse to have a look at subpass dependencies and how they work.
+`imageAvailableSemaphore` to `VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT` to ensure that
+the render passes don't begin until the image is available, or we can make the
+render pass wait for the `VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT` stage.
+I've decided to go with the second option here, because it's a good excuse to
+have a look at subpass dependencies and how they work.
 
 Subpass dependencies are specified in `VkSubpassDependency` structs. Go to the
 `createRenderPass` function and add one:
@@ -310,8 +317,8 @@ something resembling the following when you run your program:
 ![](/images/triangle.png)
 
 Yay! Unfortunately, you'll see that when validation layers are enabled, the
-program crashes as soon as you close it. The message printed to the terminal
-from `debugCallback` tells us why:
+program crashes as soon as you close it. The messages printed to the terminal
+from `debugCallback` tell us why:
 
 ![](/images/semaphore_in_use.png)
 
@@ -331,8 +338,6 @@ void mainLoop() {
     }
 
     vkDeviceWaitIdle(device);
-
-    glfwDestroyWindow(window);
 }
 ```
 
@@ -341,9 +346,207 @@ You can also wait for operations in a specific command queue to be finished with
 perform synchronization. You'll see that the program now exits without problems
 when closing the window.
 
+## Frames in flight
+
+If you run your application with validation layers enabled and you monitor the
+memory usage of your application, you may notice that it is slowly growing. The reason for this is that the application is rapidly submitting work in the `drawFrame` function, but doesn't actually check if any of it finishes. If the CPU is submitting work faster than the GPU can keep up with then the queue will slowly fill up with work. Worse, even, is that we are reusing the `imageAvailableSemaphore` and `renderFinishedSemaphore` for multiple frames at the same time.
+
+The easy way to solve this is to wait for work to finish right after submitting it, for example by using `vkQueueWaitIdle`:
+
+```c++
+void drawFrame() {
+    ...
+
+    vkQueuePresentKHR(presentQueue, &presentInfo);
+
+    vkQueueWaitIdle(presentQueue);
+}
+```
+
+However, we are likely not optimally using the GPU in this way, because the whole graphics pipeline is only used for one frame at a time right now. The stages that the current frame has already progressed through are idle and could already be used for a next frame. We will now extend our application to allow for multiple frames to be *in-flight* while still bounding the amount of work that piles up.
+
+Start by adding a constant at the top of the program that defines how many frames should be processed concurrently:
+
+```c++
+const int MAX_FRAMES_IN_FLIGHT = 2;
+```
+
+Each frame should have its own set of semaphores:
+
+```c++
+std::vector<VkSemaphore> imageAvailableSemaphores;
+std::vector<VkSemaphore> renderFinishedSemaphores;
+```
+
+The `createSemaphores` function should be changed to create all of these:
+
+```c++
+void createSemaphores() {
+    imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+
+    VkSemaphoreCreateInfo semaphoreInfo = {};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+            vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS) {
+
+            throw std::runtime_error("failed to create semaphores for a frame!");
+        }
+}
+```
+
+Similarly, they should also all be cleaned up:
+
+```c++
+void cleanup() {
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+        vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+    }
+
+    ...
+}
+```
+
+To use the right pair of semaphores every time, we need to keep track of the current frame. We will use a frame index for that purpose:
+
+```c++
+size_t currentFrame = 0;
+```
+
+The `drawFrame` function can now be modified to use the right objects:
+
+```c++
+void drawFrame() {
+    vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+    ...
+
+    VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
+
+    ...
+
+    VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
+
+    ...
+}
+```
+
+Of course, we shouldn't forget to advance to the next frame every time:
+
+```c++
+void drawFrame() {
+    ...
+
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+```
+
+By using the modulo (%) operator, we ensure that the frame index loops around after every `MAX_FRAMES_IN_FLIGHT` enqueued frames.
+
+Although we've not set up the required objects to facilitate processing of multiple frames simultaneously, we still don't actually prevent more than `MAX_FRAMES_IN_FLIGHT` from being submitted. Right now there is only GPU-GPU synchronization and no CPU-GPU synchronization going on to keep track of how the work is going. We may be using the frame #0 objects while frame #0 is still in-flight!
+
+To perform CPU-GPU synchronization, Vulkan offers a second type of synchronization primitive called *fences*. Fences are similar to semaphores in the sense that they can be signaled and waited for, but this time we actually wait for them in our own code. We'll first create a fence for each frame:
+
+```c++
+std::vector<VkSemaphore> imageAvailableSemaphores;
+std::vector<VkSemaphore> renderFinishedSemaphores;
+std::vector<VkFence> inFlightFences;
+size_t currentFrame = 0;
+```
+
+I've decided to create the fences together with the semaphores and renamed `createSemaphores` to `createSyncObjects`:
+
+```c++
+void createSyncObjects() {
+    imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+    VkSemaphoreCreateInfo semaphoreInfo = {};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    VkFenceCreateInfo fenceInfo = {};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+            vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
+            vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
+
+            throw std::runtime_error("failed to create synchronization objects for a frame!");
+        }
+    }
+}
+```
+
+The creation of fences (`VkFence`) is very similar to the creation of semaphores. Also make sure to clean up the fences:
+
+```c++
+void cleanup() {
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+        vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+        vkDestroyFence(device, inFlightFences[i], nullptr);
+    }
+
+    ...
+}
+```
+
+We will now change `drawFrame` to use the fences for synchronization. The `vkQueueSubmit` call includes an optional parameter to pass a fence that should be signaled when the command buffer finishes executing. We can use this to signal that a frame has finished.
+
+```c++
+void drawFrame() {
+    ...
+
+    if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
+        throw std::runtime_error("failed to submit draw command buffer!");
+    }
+    ...
+}
+```
+
+Now the only thing remaining is to change the beginning of `drawFrame` to wait for the frame to be finished:
+
+```c++
+void drawFrame() {
+    vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, std::numeric_limits<uint64_t>::max());
+    vkResetFences(device, 1, &inFlightFences[currentFrame]);
+
+    ...
+}
+```
+
+The `vkWaitForFences` function takes an array of fences and waits for either any or all of them to be signaled before returning. The `VK_TRUE` we pass here indicates that we want to wait for all fences, but in the case of a single one it obviously doesn't matter. Just like `vkAcquireNextImageKHR` this function also takes a timeout. Unlike the semaphores, we manually need to restore the fence to the unsignaled state by resetting it with the `vkResetFences` call.
+
+If you run the program now, you'll notice something something strange. The application no longer seems to be rendering anything. With validation layers enabled, you'll see the following message:
+
+![](/images/unsubmitted_fence.png)
+
+That means that we're waiting for a fence that has not been submitted. The problem here is that, by default, fences are created in the unsignaled state. That means that `vkWaitForFences` will wait forever if we haven't used the fence before. To solve that, we can change the fence creation to initialize it in the signaled state as if we had rendered an initial frame that finished:
+
+```c++
+void createSyncObjects() {
+    ...
+
+    VkFenceCreateInfo fenceInfo = {};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    ...
+}
+```
+
+The program should now work correctly and the memory leak should be gone! We've now implemented all the needed synchronization to ensure that there are no more than two frames of work enqueued. Note that it is fine for other parts of the code, like the final cleanup, to rely on more rough synchronization like `vkDeviceWaitIdle`. You should decide on which approach to use based on performance requirements.
+
+To learn more about synchronization through examples, have a look at [this extensive overview](https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples#swapchain-image-acquire-and-present) by Khronos.
+
 ## Conclusion
 
-About 800 lines of code later, we've finally gotten to the stage of seeing
+A little over 900 lines of code later, we've finally gotten to the stage of seeing
 something pop up on the screen! Bootstrapping a Vulkan program is definitely a
 lot of work, but the take-away message is that Vulkan gives you an immense
 amount of control through its explicitness. I recommend you to take some time
@@ -355,6 +558,6 @@ from this point on.
 In the next chapter we'll deal with one more small thing that is required for a
 well-behaved Vulkan program.
 
-[C++ code](/code/hello_triangle.cpp) /
-[Vertex shader](/code/shader_base.vert) /
-[Fragment shader](/code/shader_base.frag)
+[C++ code](/code/15_hello_triangle.cpp) /
+[Vertex shader](/code/09_shader_base.vert) /
+[Fragment shader](/code/09_shader_base.frag)
